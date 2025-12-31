@@ -1,0 +1,394 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dashboard Mitra Kiara - Bin Content</title>
+    
+    <!-- React & ReactDOM -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    
+    <!-- Babel for JSX -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- Font Awesome -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f3f4f6; }
+        .spinner { border: 4px solid rgba(0, 0, 0, 0.1); width: 36px; height: 36px; border-radius: 50%; border-left-color: #09f; animation: spin 1s ease infinite; }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useMemo } = React;
+
+        // --- Konfigurasi URL ---
+        const BC_BASE_URL = "http://mitrakiara-bc.com:7048/BusinessCentral/ODataV4/Company('PT%20Mitra%20Kiara%20Indonesia')";
+        // Link Google Sheet Export ke CSV (Sheet GID 1628010390)
+        const GSHEET_CSV_URL = "https://docs.google.com/spreadsheets/d/1OOhR4CiIgjLNbVdIQsc6bLxz0nCwhr9lDdmL7zm6wIc/export?format=csv&gid=1628010390";
+
+        // Komponen Login
+        const LoginForm = ({ onLogin, onDemo, loading }) => {
+            const [username, setUsername] = useState('logistik');
+            const [password, setPassword] = useState('6ouHPX62EhPS6BEoW5zBFuxgqRVGXcELiOZwcJjgrE0=');
+
+            const handleSubmit = (e) => {
+                e.preventDefault();
+                onLogin(username, password);
+            };
+
+            return (
+                <div className="min-h-screen flex items-center justify-center bg-gray-100 p-4">
+                    <div className="bg-white p-8 rounded-lg shadow-lg w-full max-w-md">
+                        <div className="text-center mb-6">
+                            <h1 className="text-2xl font-bold text-gray-800">Login Dashboard</h1>
+                            <p className="text-sm text-gray-500">PT Mitra Kiara Indonesia</p>
+                        </div>
+                        <form onSubmit={handleSubmit} className="space-y-4">
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700">Username BC</label>
+                                <input 
+                                    type="text" 
+                                    required 
+                                    className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+                                    value={username}
+                                    onChange={(e) => setUsername(e.target.value)}
+                                />
+                            </div>
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700">Password BC</label>
+                                <input 
+                                    type="password" 
+                                    required 
+                                    className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+                                    value={password}
+                                    onChange={(e) => setPassword(e.target.value)}
+                                />
+                            </div>
+                            <div className="text-xs text-yellow-600 bg-yellow-50 p-2 rounded border border-yellow-200">
+                                <i className="fas fa-info-circle mr-1"></i>
+                                <strong>Catatan Teknis:</strong> Jika muncul error "Failed to fetch", kemungkinan browser memblokir akses ke server HTTP (Mixed Content) atau server menolak akses (CORS).
+                            </div>
+                            <div className="flex flex-col gap-2">
+                                <button 
+                                    type="submit" 
+                                    disabled={loading}
+                                    className={`w-full flex justify-center py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white ${loading ? 'bg-gray-400 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-700'} focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500`}
+                                >
+                                    {loading ? 'Menghubungkan...' : 'Masuk & Ambil Data'}
+                                </button>
+                                <button 
+                                    type="button" 
+                                    onClick={onDemo}
+                                    className="w-full flex justify-center py-2 px-4 border border-gray-300 rounded-md shadow-sm text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
+                                >
+                                    Mode Demo (Data Dummy)
+                                </button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            );
+        };
+
+        // Helper untuk parse CSV Google Sheet
+        const parseCSV = (text) => {
+            const rows = text.split('\n').map(row => row.split(','));
+            const map = new Map();
+            rows.forEach((row, index) => {
+                if (index === 0) return; // Skip header
+                if (row.length < 9) return; // Skip baris tidak lengkap
+                const itemNo = row[0]?.replace(/^"|"$/g, '').trim(); 
+                const qty = row[8]?.replace(/^"|"$/g, '').trim(); // Kolom I adalah index 8 (0-based)
+                if (itemNo) {
+                    map.set(itemNo, parseFloat(qty) || 0);
+                }
+            });
+            return map;
+        };
+
+        const Dashboard = () => {
+            const [auth, setAuth] = useState(null);
+            const [data, setData] = useState([]);
+            const [loading, setLoading] = useState(false);
+            const [error, setError] = useState(null);
+            const [searchTerm, setSearchTerm] = useState('');
+            const [isDemo, setIsDemo] = useState(false);
+
+            const fetchData = async (username, password) => {
+                setLoading(true);
+                setError(null);
+                setIsDemo(false);
+
+                const headers = new Headers();
+                headers.set('Authorization', 'Basic ' + btoa(username + ":" + password));
+                headers.set('Content-Type', 'application/json');
+
+                try {
+                    // 1. Fetch BinContentData
+                    const binResponse = await fetch(`${BC_BASE_URL}/BinContentData`, { headers });
+                    if (!binResponse.ok) throw new Error(`Gagal mengambil BinContentData (${binResponse.status}). Cek User/Pass.`);
+                    const binJson = await binResponse.json();
+                    
+                    const filteredBin = binJson.value.filter(item => 
+                        item.Location_Code === 'NAROGONG' && 
+                        (item.Zone_Code === 'FG E' || item.Zone_Code === 'GUDANG FG')
+                    );
+
+                    // 2. Fetch ItemCard
+                    const itemResponse = await fetch(`${BC_BASE_URL}/itemcard`, { headers });
+                    if (!itemResponse.ok) throw new Error(`Gagal mengambil ItemCard (${itemResponse.status})`);
+                    const itemJson = await itemResponse.json();
+                    
+                    const itemMap = new Map();
+                    itemJson.value.forEach(item => {
+                        itemMap.set(item.No, item.Description);
+                    });
+
+                    // 3. Fetch Google Sheet
+                    let gSheetMap = new Map();
+                    try {
+                        const sheetResponse = await fetch(GSHEET_CSV_URL);
+                        if (sheetResponse.ok) {
+                            const csvText = await sheetResponse.text();
+                            gSheetMap = parseCSV(csvText);
+                        }
+                    } catch (err) {
+                        console.warn("Gagal fetch Google Sheet:", err);
+                    }
+
+                    // 4. Gabungkan Data
+                    const mergedData = filteredBin.map(row => ({
+                        Item_No: row.Item_No,
+                        Description: itemMap.get(row.Item_No) || '-',
+                        Unit_of_Measure_Code: row.Unit_of_Measure_Code,
+                        Quantity_Base: row.Quantity_Base,
+                        Qty_Actual: gSheetMap.get(row.Item_No) || 0,
+                        Zone_Code: row.Zone_Code,
+                        Bin_Code: row.Bin_Code
+                    }));
+
+                    setData(mergedData);
+                    setAuth({ username, password });
+
+                } catch (err) {
+                    let errorMessage = err.message;
+                    if (err.message === "Failed to fetch") {
+                        errorMessage = "Gagal terhubung ke Server (Failed to fetch). Ini biasanya karena Browser memblokir akses ke 'http' dari 'https' (Mixed Content) atau server menolak akses (CORS). Cobalah install ekstensi 'Allow CORS' untuk pengujian.";
+                    }
+                    setError(errorMessage);
+                } finally {
+                    setLoading(false);
+                }
+            };
+
+            const loadDemoData = () => {
+                const dummyData = [
+                    { Item_No: 'FG-001', Description: 'Semen Mortar Instan 40kg', Unit_of_Measure_Code: 'ZAK', Quantity_Base: 150, Qty_Actual: 150, Zone_Code: 'FG E' },
+                    { Item_No: 'FG-002', Description: 'Semen Perekat Bata Ringan', Unit_of_Measure_Code: 'ZAK', Quantity_Base: 50, Qty_Actual: 48, Zone_Code: 'GUDANG FG' },
+                    { Item_No: 'FG-003', Description: 'Acian Plesteran Premium', Unit_of_Measure_Code: 'ZAK', Quantity_Base: 200, Qty_Actual: 205, Zone_Code: 'FG E' },
+                    { Item_No: 'RM-101', Description: 'Pasir Silika Halus', Unit_of_Measure_Code: 'KG', Quantity_Base: 5000, Qty_Actual: 5000, Zone_Code: 'GUDANG FG' },
+                ];
+                setData(dummyData);
+                setAuth({ username: 'DemoUser', password: 'DemoPassword' });
+                setIsDemo(true);
+                setError(null);
+            };
+
+            const handleLogout = () => {
+                setAuth(null);
+                setData([]);
+                setError(null);
+                setIsDemo(false);
+            };
+
+            const displayedData = useMemo(() => {
+                return data.filter(item => 
+                    item.Item_No.toLowerCase().includes(searchTerm.toLowerCase()) ||
+                    item.Description.toLowerCase().includes(searchTerm.toLowerCase())
+                );
+            }, [data, searchTerm]);
+
+            if (!auth) {
+                return (
+                    <div>
+                        {error && (
+                            <div className="bg-red-100 border-l-4 border-red-500 text-red-700 p-4 mb-4 mx-auto max-w-md shadow" role="alert">
+                                <p className="font-bold">Koneksi Gagal</p>
+                                <p className="text-sm">{error}</p>
+                            </div>
+                        )}
+                        <LoginForm onLogin={fetchData} onDemo={loadDemoData} loading={loading} />
+                    </div>
+                );
+            }
+
+            return (
+                <div className="min-h-screen bg-gray-50 pb-10">
+                    <nav className="bg-white shadow mb-8 border-b border-gray-200">
+                        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+                            <div className="flex justify-between h-16">
+                                <div className="flex items-center">
+                                    <h1 className="text-xl font-bold text-gray-800 flex items-center">
+                                        <i className="fas fa-cubes text-blue-600 mr-2"></i>
+                                        Stok Gudang Narogong (FG)
+                                        {isDemo && <span className="ml-2 px-2 py-0.5 rounded text-xs bg-yellow-200 text-yellow-800 border border-yellow-300">MODE DEMO</span>}
+                                    </h1>
+                                </div>
+                                <div className="flex items-center space-x-4">
+                                    {!isDemo && (
+                                        <button 
+                                            onClick={() => fetchData(auth.username, auth.password)} 
+                                            className="text-gray-600 hover:text-blue-600 transition-colors"
+                                            title="Refresh Data"
+                                        >
+                                            <i className={`fas fa-sync-alt ${loading ? 'fa-spin' : ''}`}></i>
+                                        </button>
+                                    )}
+                                    <button 
+                                        onClick={handleLogout}
+                                        className="bg-red-50 text-red-600 px-3 py-1 rounded hover:bg-red-100 text-sm font-medium border border-red-200 transition-colors"
+                                    >
+                                        Keluar
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </nav>
+
+                    <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+                        {isDemo && (
+                            <div className="mb-4 bg-yellow-50 border-l-4 border-yellow-400 p-4 text-sm text-yellow-700">
+                                <strong>Perhatian:</strong> Anda sedang melihat data dummy. Data ini tidak mencerminkan stok aktual dari server.
+                            </div>
+                        )}
+
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+                            <div className="bg-white p-4 rounded shadow border-l-4 border-blue-500">
+                                <div className="text-sm text-gray-500">Lokasi Filter</div>
+                                <div className="font-bold text-lg">NAROGONG</div>
+                            </div>
+                            <div className="bg-white p-4 rounded shadow border-l-4 border-green-500">
+                                <div className="text-sm text-gray-500">Zona Filter</div>
+                                <div className="font-bold text-lg">FG E & GUDANG FG</div>
+                            </div>
+                            <div className="bg-white p-4 rounded shadow border-l-4 border-purple-500">
+                                <div className="text-sm text-gray-500">Total Item Ditemukan</div>
+                                <div className="font-bold text-lg">{displayedData.length} SKU</div>
+                            </div>
+                        </div>
+
+                        <div className="mb-4">
+                            <div className="relative rounded-md shadow-sm max-w-md">
+                                <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                                    <i className="fas fa-search text-gray-400"></i>
+                                </div>
+                                <input
+                                    type="text"
+                                    className="focus:ring-blue-500 focus:border-blue-500 block w-full pl-10 sm:text-sm border-gray-300 rounded-md p-2 border"
+                                    placeholder="Cari Item No atau Deskripsi..."
+                                    value={searchTerm}
+                                    onChange={(e) => setSearchTerm(e.target.value)}
+                                />
+                            </div>
+                        </div>
+
+                        <div className="bg-white shadow overflow-hidden rounded-lg">
+                            <div className="overflow-x-auto">
+                                <table className="min-w-full divide-y divide-gray-200">
+                                    <thead className="bg-gray-50">
+                                        <tr>
+                                            <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                                                Item No
+                                            </th>
+                                            <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                                                Deskripsi
+                                            </th>
+                                            <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                                                Satuan (UoM)
+                                            </th>
+                                            <th scope="col" className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider bg-blue-50">
+                                                Qty Base (BC)
+                                            </th>
+                                            <th scope="col" className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider bg-green-50">
+                                                Qty Actual (GSheet)
+                                            </th>
+                                            <th scope="col" className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
+                                                Selisih
+                                            </th>
+                                        </tr>
+                                    </thead>
+                                    <tbody className="bg-white divide-y divide-gray-200">
+                                        {displayedData.length === 0 ? (
+                                            <tr>
+                                                <td colSpan="6" className="px-6 py-8 text-center text-gray-500">
+                                                    <div className="flex flex-col items-center">
+                                                        <i className="fas fa-search text-gray-300 text-4xl mb-2"></i>
+                                                        <span>Tidak ada data ditemukan.</span>
+                                                    </div>
+                                                </td>
+                                            </tr>
+                                        ) : (
+                                            displayedData.map((row, index) => {
+                                                const selisih = row.Qty_Actual - row.Quantity_Base;
+                                                const selisihColor = selisih === 0 ? 'text-gray-400' : (selisih < 0 ? 'text-red-600 font-bold' : 'text-green-600 font-bold');
+                                                
+                                                return (
+                                                    <tr key={index} className="hover:bg-gray-50 transition-colors">
+                                                        <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
+                                                            {row.Item_No}
+                                                            <div className="text-xs text-gray-400 font-normal mt-0.5">
+                                                                <i className="fas fa-map-marker-alt mr-1"></i>
+                                                                {row.Zone_Code}
+                                                            </div>
+                                                        </td>
+                                                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                                                            {row.Description}
+                                                        </td>
+                                                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                                                            <span className="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-gray-100 text-gray-800">
+                                                                {row.Unit_of_Measure_Code}
+                                                            </span>
+                                                        </td>
+                                                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 text-right bg-blue-50 font-semibold border-l border-blue-100">
+                                                            {row.Quantity_Base.toLocaleString('id-ID')}
+                                                        </td>
+                                                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 text-right bg-green-50 font-semibold border-l border-green-100">
+                                                            {row.Qty_Actual.toLocaleString('id-ID')}
+                                                        </td>
+                                                        <td className={`px-6 py-4 whitespace-nowrap text-sm text-right border-l border-gray-100 ${selisihColor}`}>
+                                                            {selisih > 0 ? '+' : ''}{selisih.toLocaleString('id-ID')}
+                                                        </td>
+                                                    </tr>
+                                                );
+                                            })
+                                        )}
+                                    </tbody>
+                                </table>
+                            </div>
+                            <div className="bg-gray-50 px-6 py-3 border-t text-xs text-gray-500 flex justify-between items-center">
+                                <span>Menampilkan {displayedData.length} data</span>
+                                <span className="flex items-center gap-2">
+                                    <span className="w-2 h-2 rounded-full bg-green-500"></span>
+                                    {isDemo ? 'Mode Offline / Demo' : 'Live Data'}
+                                </span>
+                            </div>
+                        </div>
+                    </main>
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<Dashboard />);
+    </script>
+</body>
+</html>
